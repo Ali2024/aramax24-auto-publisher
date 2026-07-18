@@ -166,7 +166,7 @@ def pick_today_keyword():
     )
 
     return keywords[idx]
-    def build_prompt(item):
+def build_prompt(item):
 
     today = datetime.now().strftime("%Y-%m-%d")
 
@@ -275,7 +275,7 @@ def generate_article(item):
         article["schema_jsonld"] = {}
 
     return article
-    def publish(article):
+def publish(article):
 
     schema = ""
 
@@ -384,7 +384,7 @@ def generate_article(item):
         except Exception:
 
             raise
-            def notify_success(item, article, link):
+def notify_success(item, article, link):
 
     message = f"""
 ✅ <b>مقاله جدید منتشر شد</b>
