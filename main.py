@@ -1,8 +1,8 @@
 """
 آرامکس۲۴ — تولید و انتشار خودکار روزانه مقاله (نسخه GitHub Actions)
 ======================================================================
-برخلاف نسخه قبلی (سرور دائمی + APScheduler)، این نسخه یک‌بار اجرا می‌شود
-و خارج می‌شود. زمان‌بندی روزانه را خود GitHub Actions (cron) انجام می‌دهد.
+این نسخه یک‌بار اجرا می‌شود و خارج می‌شود. زمان‌بندی روزانه را خود
+GitHub Actions (cron) انجام می‌دهد.
 
 مراحل هر اجرا:
   1) خواندن state.json برای فهمیدن کلمه کلیدی نوبت امروز
@@ -51,6 +51,10 @@ TELEGRAM_CHAT_ID = env("TELEGRAM_CHAT_ID")
 WP_BASE_URL = env("WP_BASE_URL").rstrip("/")
 WP_USERNAME = env("WP_USERNAME")
 WP_APP_PASSWORD = env("WP_APP_PASSWORD")
+
+# اگر متغیر CLAUDE_MODEL در Secrets/Variables تعریف نشده یا خالی باشد،
+# به‌جای فرستادن رشته خالی به Anthropic (که باعث خطای 400 می‌شود)،
+# از مقدار پیش‌فرض معتبر استفاده می‌کنیم.
 MODEL_NAME = os.environ.get("CLAUDE_MODEL") or "claude-sonnet-5"
 
 
@@ -133,6 +137,8 @@ def build_prompt(item: dict) -> str:
 
 def generate_article(item: dict) -> dict:
     log.info(f"در حال ساخت مقاله برای کلمه کلیدی: {item['keyword']}")
+    log.info(f"مدل مورد استفاده: {MODEL_NAME}")
+
     resp = requests.post(
         "https://api.anthropic.com/v1/messages",
         headers={
@@ -147,8 +153,11 @@ def generate_article(item: dict) -> dict:
         },
         timeout=280,
     )
-if resp.status_code >= 400:
-        log.error(f"پاسخ خطای Anthropic: {resp.text}")
+
+    if resp.status_code >= 400:
+        # چاپ متن دقیق پیام خطای Anthropic برای عیب‌یابی راحت‌تر در لاگ Actions
+        log.error(f"پاسخ خطای Anthropic (کد {resp.status_code}): {resp.text}")
+
     resp.raise_for_status()
     data = resp.json()
 
@@ -183,6 +192,10 @@ def publish_to_wordpress(article: dict) -> str:
         },
         timeout=60,
     )
+
+    if resp.status_code >= 400:
+        log.error(f"پاسخ خطای وردپرس (کد {resp.status_code}): {resp.text}")
+
     resp.raise_for_status()
     post = resp.json()
     return post.get("link", f"{WP_BASE_URL}/?p={post.get('id')}")
