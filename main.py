@@ -51,7 +51,7 @@ TELEGRAM_CHAT_ID = env("TELEGRAM_CHAT_ID")
 WP_BASE_URL = env("WP_BASE_URL").rstrip("/")
 WP_USERNAME = env("WP_USERNAME")
 WP_APP_PASSWORD = env("WP_APP_PASSWORD")
-MODEL_NAME = env("CLAUDE_MODEL", required=False, default="claude-sonnet-5")
+MODEL_NAME = os.environ.get("CLAUDE_MODEL") or "claude-sonnet-5"
 
 
 def load_json(path, default):
