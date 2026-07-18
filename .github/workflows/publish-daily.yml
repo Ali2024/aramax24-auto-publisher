@@ -33,7 +33,7 @@ jobs:
           WP_BASE_URL: ${{ secrets.WP_BASE_URL }}
           WP_USERNAME: ${{ secrets.WP_USERNAME }}
           WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
-          CLAUDE_MODEL: ${{ vars.CLAUDE_MODEL }}
+          
         run: python main.py
 
       - name: Commit updated state.json
