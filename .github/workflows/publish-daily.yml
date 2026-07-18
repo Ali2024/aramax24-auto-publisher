@@ -1,0 +1,45 @@
+name: Daily Article Publisher
+
+# زمان‌بندی: هر روز ساعت ۹:۰۰ صبح به وقت تهران (UTC+3:30) = ۰۵:۳۰ UTC
+# می‌توانید علاوه بر زمان‌بندی، از تب Actions به‌صورت دستی هم اجرا کنید (workflow_dispatch)
+on:
+  schedule:
+    - cron: "30 5 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write   # برای commit کردن state.json به‌روزشده لازم است
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run daily publisher
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          WP_BASE_URL: ${{ secrets.WP_BASE_URL }}
+          WP_USERNAME: ${{ secrets.WP_USERNAME }}
+          WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
+          CLAUDE_MODEL: ${{ vars.CLAUDE_MODEL }}
+        run: python main.py
+
+      - name: Commit updated state.json
+        run: |
+          git config user.name "aramax24-bot"
+          git config user.email "actions@github.com"
+          git add state.json
+          git diff --cached --quiet || git commit -m "chore: update day_index after publishing [skip ci]"
+          git push
