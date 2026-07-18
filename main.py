@@ -1,37 +1,19 @@
-"""
-آرامکس۲۴ — تولید و انتشار خودکار روزانه مقاله (نسخه GitHub Actions)
-======================================================================
-این نسخه یک‌بار اجرا می‌شود و خارج می‌شود. زمان‌بندی روزانه را خود
-GitHub Actions (cron) انجام می‌دهد.
 
-مراحل هر اجرا:
-  1) خواندن state.json برای فهمیدن کلمه کلیدی نوبت امروز
-  2) ساخت مقاله کامل با Claude API
-  3) انتشار مستقیم در وردپرس (status=publish)
-  4) اطلاع‌رسانی به تلگرام
-  5) ذخیره state.json به‌روزشده (workflow آن را دوباره commit می‌کند)
-
-در صورت بروز خطا، کد خروجی غیرصفر برمی‌گرداند تا در تب Actions گیت‌هاب
-به‌صورت ❌ قرمز دیده شود، و همچنین پیام خطا به تلگرام ارسال می‌شود.
-"""
-
-import os
-import sys
-import json
-import re
-import logging
+# main.py
+import os, json, re, logging, sys
 from datetime import datetime, timezone
 
 import requests
+from openai import OpenAI
 
 try:
     from dotenv import load_dotenv
-    load_dotenv()  # فقط برای اجرای محلی؛ در GitHub Actions فایل .env وجود ندارد و بی‌اثر است
-except ImportError:
+    load_dotenv()
+except Exception:
     pass
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-log = logging.getLogger("aramax24-publisher")
+log = logging.getLogger("publisher")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATE_FILE = os.path.join(BASE_DIR, "state.json")
@@ -39,195 +21,129 @@ KEYWORDS_FILE = os.path.join(BASE_DIR, "keywords.json")
 
 
 def env(name, required=True, default=None):
-    val = os.environ.get(name, default)
-    if required and not val:
-        raise RuntimeError(f"متغیر محیطی {name} تنظیم نشده است (باید در GitHub Secrets اضافه شود).")
-    return val
+    v = os.getenv(name, default)
+    if required and not v:
+        raise RuntimeError(f"Missing env: {name}")
+    return v
 
-
-ANTHROPIC_API_KEY = env("ANTHROPIC_API_KEY")
-TELEGRAM_BOT_TOKEN = env("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = env("TELEGRAM_CHAT_ID")
+NVIDIA_API_KEY = env("NVIDIA_API_KEY")
 WP_BASE_URL = env("WP_BASE_URL").rstrip("/")
 WP_USERNAME = env("WP_USERNAME")
 WP_APP_PASSWORD = env("WP_APP_PASSWORD")
+TELEGRAM_BOT_TOKEN = env("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = env("TELEGRAM_CHAT_ID")
 
-# اگر متغیر CLAUDE_MODEL در Secrets/Variables تعریف نشده یا خالی باشد،
-# به‌جای فرستادن رشته خالی به Anthropic (که باعث خطای 400 می‌شود)،
-# از مقدار پیش‌فرض معتبر استفاده می‌کنیم.
-MODEL_NAME = os.environ.get("CLAUDE_MODEL") or "claude-sonnet-5"
+MODEL = os.getenv("NVIDIA_MODEL", "nvidia/nemotron-3-ultra-550b-a55b")
 
+client = OpenAI(
+    base_url="https://integrate.api.nvidia.com/v1",
+    api_key=NVIDIA_API_KEY,
+)
 
 def load_json(path, default):
     if not os.path.exists(path):
         return default
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path,"r",encoding="utf-8") as f:
         return json.load(f)
 
+def save_json(path,data):
+    with open(path,"w",encoding="utf-8") as f:
+        json.dump(data,f,ensure_ascii=False,indent=2)
 
-def save_json(path, data):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-
-def send_telegram(text: str):
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+def telegram(msg):
     try:
-        r = requests.post(
-            url,
-            json={
-                "chat_id": TELEGRAM_CHAT_ID,
-                "text": text,
-                "parse_mode": "HTML",
-                "disable_web_page_preview": False,
-            },
-            timeout=15,
-        )
-        r.raise_for_status()
+        requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+            json={"chat_id":TELEGRAM_CHAT_ID,"text":msg,"parse_mode":"HTML"},
+            timeout=20,
+        ).raise_for_status()
     except Exception as e:
-        log.error(f"ارسال پیام تلگرام ناموفق بود: {e}")
+        log.error(e)
 
+def pick():
+    kws=load_json(KEYWORDS_FILE,[])
+    st=load_json(STATE_FILE,{"day_index":0})
+    idx=st["day_index"]%len(kws)
+    st["day_index"]=idx+1
+    save_json(STATE_FILE,st)
+    return kws[idx]
 
-def pick_today_keyword():
-    keywords = load_json(KEYWORDS_FILE, [])
-    if not keywords:
-        raise RuntimeError("فایل keywords.json خالی است یا پیدا نشد.")
+def prompt(item):
+    return f"""
+فقط یک JSON معتبر تولید کن.
 
-    state = load_json(STATE_FILE, {"day_index": 0})
-    idx = state["day_index"] % len(keywords)
-    item = keywords[idx]
+کلمه کلیدی:
+{item["keyword"]}
 
-    state["day_index"] = idx + 1
-    save_json(STATE_FILE, state)
-    return item
+دسته:
+{item["category"]}
 
+حدود 1500 کلمه بنویس.
 
-def build_prompt(item: dict) -> str:
-    return f"""تو یک متخصص سئوی فارسی و تولید محتوا برای سایت خدمات تعمیرات ساختمان و تأسیسات
-(aramax24.ir) در غرب تهران هستی.
-
-یک مقاله وبلاگ کامل، حرفه‌ای و آماده انتشار فوری برای کلمه کلیدی زیر بنویس. این محتوا
-مستقیم و بدون بازبینی انسانی منتشر می‌شود، پس نباید هیچ placeholder یا متن ناقص داشته باشد.
-
-کلمه کلیدی: {item['keyword']}
-دسته‌بندی سایت: {item['category']}
-لینک داخلی که باید با anchor text طبیعی حداقل یک‌بار در متن استفاده شود: {item['related_link']}
-لینک آرشیو دسته‌بندی (در صورت وجود و متفاوت از placeholder، حتماً هم به این لینک بده): {item.get('category_archive_link', '')}
-
-الزامات محتوا:
-- مقدمه، فهرست مطالب، حداقل ۴ تا ۶ زیرعنوان H2/H3، جدول در صورت لزوم، جمع‌بندی
-- ۵ تا ۶ سوال متداول (FAQ) در پایان
-- طول حدود ۱۲۰۰ تا ۱۸۰۰ کلمه، لحن حرفه‌ای و قابل‌فهم
-- **هیچ قیمت یا رقم دقیقی حدس نزن و ننویس.** به‌جای جدول قیمت با اعداد، بنویس که
-  «هزینه بسته به نوع خرابی و مدل دستگاه متفاوت است؛ برای برآورد دقیق با کارشناسان
-  آرامکس۲۴ تماس بگیرید» و لینک تماس با ما را بگذار: https://aramax24.ir/contact-us/
-- Meta Title زیر ۶۰ کاراکتر، Meta Description زیر ۱۵۵ کاراکتر
-- اسکیمای JSON-LD کامل از نوع Article و FAQPage با تاریخ امروز ({datetime.now().strftime('%Y-%m-%d')})
-
-خروجی را دقیقاً و فقط به‌صورت یک JSON با این ساختار بده، بدون هیچ متن اضافه قبل یا بعدش:
+فرمت:
 {{
-  "title": "...",
-  "slug": "...",
-  "meta_title": "...",
-  "meta_description": "...",
-  "content_html": "<h2>...</h2><p>...</p> ... (بدنه کامل مقاله به HTML، شامل FAQ)",
-  "schema_jsonld": {{ ... }}
-}}"""
+"title":"",
+"slug":"",
+"meta_title":"",
+"meta_description":"",
+"content_html":"",
+"schema_jsonld":{{}}
+}}
+"""
 
-
-def generate_article(item: dict) -> dict:
-    log.info(f"در حال ساخت مقاله برای کلمه کلیدی: {item['keyword']}")
-    log.info(f"مدل مورد استفاده: {MODEL_NAME}")
-
-    resp = requests.post(
-        "https://api.anthropic.com/v1/messages",
-        headers={
-            "x-api-key": ANTHROPIC_API_KEY,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-        },
-        json={
-            "model": MODEL_NAME,
-            "max_tokens": 8000,
-            "messages": [{"role": "user", "content": build_prompt(item)}],
-        },
-        timeout=280,
+def generate(item):
+    r=client.chat.completions.create(
+        model=MODEL,
+        messages=[
+            {"role":"system","content":"تو متخصص سئو و تولید محتوای فارسی هستی. فقط JSON معتبر خروجی بده."},
+            {"role":"user","content":prompt(item)}
+        ],
+        temperature=0.6,
+        top_p=0.9,
+        max_tokens=12000
     )
 
-    if resp.status_code >= 400:
-        # چاپ متن دقیق پیام خطای Anthropic برای عیب‌یابی راحت‌تر در لاگ Actions
-        log.error(f"پاسخ خطای Anthropic (کد {resp.status_code}): {resp.text}")
-
-    resp.raise_for_status()
-    data = resp.json()
-
-    text_block = next(b for b in data["content"] if b["type"] == "text")
-    raw = text_block["text"]
+    raw=r.choices[0].message.content.strip()
 
     try:
         return json.loads(raw)
-    except json.JSONDecodeError:
-        match = re.search(r"\{[\s\S]*\}", raw)
-        if not match:
-            raise RuntimeError("خروجی Claude به‌صورت JSON قابل‌پارس نبود.")
-        return json.loads(match.group(0))
+    except:
+        m=re.search(r"\{[\s\S]*\}",raw)
+        if not m:
+            raise RuntimeError(raw)
+        return json.loads(m.group(0))
 
+def publish(article):
+    schema=f'<script type="application/ld+json">{json.dumps(article["schema_jsonld"],ensure_ascii=False)}</script>'
+    content=article["content_html"]+"\n"+schema
 
-def publish_to_wordpress(article: dict) -> str:
-    schema_script = (
-        f'<script type="application/ld+json">'
-        f'{json.dumps(article["schema_jsonld"], ensure_ascii=False)}</script>'
-    )
-    full_content = article["content_html"] + "\n" + schema_script
-
-    resp = requests.post(
+    r=requests.post(
         f"{WP_BASE_URL}/wp-json/wp/v2/posts",
-        auth=(WP_USERNAME, WP_APP_PASSWORD),
+        auth=(WP_USERNAME,WP_APP_PASSWORD),
         json={
-            "title": article["title"],
-            "slug": article["slug"],
-            "content": full_content,
-            "status": "publish",
-            "excerpt": article.get("meta_description", ""),
+            "title":article["title"],
+            "slug":article["slug"],
+            "content":content,
+            "status":"publish",
+            "excerpt":article.get("meta_description","")
         },
         timeout=60,
     )
-
-    if resp.status_code >= 400:
-        log.error(f"پاسخ خطای وردپرس (کد {resp.status_code}): {resp.text}")
-
-    resp.raise_for_status()
-    post = resp.json()
-    return post.get("link", f"{WP_BASE_URL}/?p={post.get('id')}")
-
+    r.raise_for_status()
+    return r.json()["link"]
 
 def main():
-    now = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M")
     try:
-        item = pick_today_keyword()
-        article = generate_article(item)
-        link = publish_to_wordpress(article)
-
-        send_telegram(
-            f"✅ <b>مقاله جدید منتشر شد</b>\n"
-            f"🕘 {now}\n"
-            f"📂 دسته: {item['category']}\n"
-            f"📝 عنوان: {article['title']}\n"
-            f"🔗 {link}"
-        )
-        log.info(f"مقاله با موفقیت منتشر شد: {link}")
+        item=pick()
+        log.info(item["keyword"])
+        article=generate(item)
+        link=publish(article)
+        telegram(f"✅ {article['title']}\n{link}")
         return 0
-
     except Exception as e:
-        log.exception("خطا در فرآیند روزانه")
-        send_telegram(
-            f"❌ <b>خطا در تولید/انتشار مقاله روزانه</b>\n"
-            f"🕘 {now}\n"
-            f"جزئیات: {str(e)[:500]}\n\n"
-            f"لطفاً لاگ اجرای Action در گیت‌هاب را بررسی کنید."
-        )
+        log.exception(e)
+        telegram(f"❌ {e}")
         return 1
 
-
-if __name__ == "__main__":
+if __name__=="__main__":
     sys.exit(main())
