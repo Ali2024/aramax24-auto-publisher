@@ -1,7 +1,6 @@
 """
 Aramax24 Auto Publisher
-Version 2.0
-NVIDIA Build + WordPress + Telegram
+NVIDIA Build Edition
 """
 
 import os
@@ -9,13 +8,15 @@ import re
 import json
 import time
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 
 import requests
+
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from openai import OpenAI
+
 
 try:
     from dotenv import load_dotenv
@@ -31,81 +32,140 @@ logging.basicConfig(
 
 log = logging.getLogger("aramax24")
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-STATE_FILE = os.path.join(BASE_DIR, "state.json")
-KEYWORDS_FILE = os.path.join(BASE_DIR, "keywords.json")
+BASE_DIR = os.path.dirname(
+    os.path.abspath(__file__)
+)
+
+
+STATE_FILE = os.path.join(
+    BASE_DIR,
+    "state.json"
+)
+
+
+KEYWORDS_FILE = os.path.join(
+    BASE_DIR,
+    "keywords.json"
+)
 
 
 def env(name, required=True, default=None):
-    value = os.getenv(name, default)
+
+    value = os.getenv(
+        name,
+        default
+    )
 
     if required and not value:
-        raise RuntimeError(f"Environment variable '{name}' not found.")
+        raise RuntimeError(
+            f"Missing environment variable: {name}"
+        )
 
     return value
 
 
-NVIDIA_API_KEY = env("NVIDIA_API_KEY")
 
-NVIDIA_MODEL = env(
-    "NVIDIA_MODEL",
-    required=False,
-    default="nvidia/nemotron-3-ultra-550b-a55b"
+NVIDIA_API_KEY = env(
+    "NVIDIA_API_KEY"
 )
 
-WP_BASE_URL = env("WP_BASE_URL").rstrip("/")
 
-WP_USERNAME = env("WP_USERNAME")
+NVIDIA_MODEL = os.getenv(
+    "NVIDIA_MODEL",
+    "nvidia/nemotron-3-ultra-550b-a55b"
+)
 
-WP_APP_PASSWORD = env("WP_APP_PASSWORD")
 
-TELEGRAM_BOT_TOKEN = env("TELEGRAM_BOT_TOKEN")
+WP_BASE_URL = env(
+    "WP_BASE_URL"
+).rstrip("/")
 
-TELEGRAM_CHAT_ID = env("TELEGRAM_CHAT_ID")
+
+WP_USERNAME = env(
+    "WP_USERNAME"
+)
+
+
+WP_APP_PASSWORD = env(
+    "WP_APP_PASSWORD"
+)
+
+
+TELEGRAM_BOT_TOKEN = env(
+    "TELEGRAM_BOT_TOKEN"
+)
+
+
+TELEGRAM_CHAT_ID = env(
+    "TELEGRAM_CHAT_ID"
+)
+
 
 
 client = OpenAI(
     base_url="https://integrate.api.nvidia.com/v1",
-    api_key=NVIDIA_API_KEY,
+    api_key=NVIDIA_API_KEY
 )
 
 
-retry = Retry(
+
+session = requests.Session()
+
+
+retry_strategy = Retry(
+
     total=5,
-    connect=5,
-    read=5,
+
     backoff_factor=2,
+
     status_forcelist=[
         429,
         500,
         502,
         503,
         504
-    ]
+    ],
+
 )
 
-session = requests.Session()
 
-adapter = HTTPAdapter(max_retries=retry)
-
-session.mount("https://", adapter)
-
-session.mount("http://", adapter)
+adapter = HTTPAdapter(
+    max_retries=retry_strategy
+)
 
 
+session.mount(
+    "https://",
+    adapter
+)
+
+
+session.mount(
+    "http://",
+    adapter
+)
 def load_json(path, default):
 
     if not os.path.exists(path):
         return default
 
-    with open(path, "r", encoding="utf-8") as f:
+    with open(
+        path,
+        "r",
+        encoding="utf-8"
+    ) as f:
         return json.load(f)
+
 
 
 def save_json(path, data):
 
-    with open(path, "w", encoding="utf-8") as f:
+    with open(
+        path,
+        "w",
+        encoding="utf-8"
+    ) as f:
         json.dump(
             data,
             f,
@@ -114,40 +174,40 @@ def save_json(path, data):
         )
 
 
+
 def slugify(text):
 
     text = text.strip()
 
-    text = re.sub(r"\s+", "-", text)
+    text = re.sub(
+        r"\s+",
+        "-",
+        text
+    )
 
-    return text
+    text = re.sub(
+        r"[^\w\-]",
+        "",
+        text,
+        flags=re.UNICODE
+    )
+
+    return text.lower()
 
 
-def send_telegram(message):
 
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+def pick_keyword():
 
-    try:
+    keywords = load_json(
+        KEYWORDS_FILE,
+        []
+    )
 
-        session.post(
-            url,
-            json={
-                "chat_id": TELEGRAM_CHAT_ID,
-                "text": message,
-                "parse_mode": "HTML",
-                "disable_web_page_preview": False
-            },
-            timeout=30
+    if not keywords:
+        raise RuntimeError(
+            "keywords.json خالی است"
         )
 
-    except Exception as e:
-
-        log.error(e)
-
-
-def pick_today_keyword():
-
-    keywords = load_json(KEYWORDS_FILE, [])
 
     state = load_json(
         STATE_FILE,
@@ -156,56 +216,128 @@ def pick_today_keyword():
         }
     )
 
-    idx = state["day_index"] % len(keywords)
 
-    state["day_index"] = idx + 1
+    index = (
+        state["day_index"]
+        %
+        len(keywords)
+    )
+
+
+    item = keywords[index]
+
+
+    state["day_index"] = index + 1
+
 
     save_json(
         STATE_FILE,
         state
     )
 
-    return keywords[idx]
+
+    return item
+
+
+
+
+def send_telegram(message):
+
+    url = (
+        f"https://api.telegram.org/"
+        f"bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    )
+
+    try:
+
+        session.post(
+            url,
+            json={
+                "chat_id": TELEGRAM_CHAT_ID,
+                "text": message,
+                "parse_mode": "HTML"
+            },
+            timeout=30
+        )
+
+    except Exception as e:
+
+        log.error(
+            f"Telegram error: {e}"
+        )
+
+
+
+
 def build_prompt(item):
 
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now().strftime(
+        "%Y-%m-%d"
+    )
+
 
     return f"""
-تو یک متخصص حرفه‌ای سئو، نویسنده فنی و کارشناس تاسیسات ساختمان هستی.
 
-برای سایت aramax24.ir یک مقاله کاملاً حرفه‌ای تولید کن.
+تو یک متخصص ارشد سئو فارسی و نویسنده فنی حوزه تاسیسات ساختمان هستی.
 
-موضوع:
+برای سایت:
+
+aramax24.ir
+
+یک مقاله حرفه‌ای تولید کن.
+
+
+موضوع مقاله:
+
 {item["keyword"]}
 
+
 دسته:
+
 {item["category"]}
 
+
 لینک داخلی:
+
 {item["related_link"]}
 
+
 لینک دسته:
-{item["category_archive_link"]}
 
-قوانین:
+{item.get("category_archive_link","")}
 
-- مقاله کاملاً فارسی
-- حداقل 1500 کلمه
-- کاملاً یونیک
-- مناسب RankMath
-- دارای H2 و H3
-- دارای جدول
-- دارای لیست بولت
-- دارای FAQ
-- دارای نتیجه گیری
-- دارای CTA
-- لینک داخلی را طبیعی استفاده کن.
-- اگر لینک دسته وجود داشت از آن نیز استفاده کن.
-- هیچ Placeholder ننویس.
-- هیچ Markdown ننویس.
-- فقط HTML.
 
-در انتها فقط JSON زیر را برگردان.
+
+قوانین محتوا:
+
+- زبان کاملاً فارسی
+- مناسب موتور جستجو گوگل
+- حداقل 1200 کلمه
+- مقدمه جذاب
+- فهرست مطالب
+- 5 بخش H2
+- چند H3 مرتبط
+- جدول در صورت نیاز
+- FAQ حداقل 5 سوال
+- جمع بندی
+- دعوت به تماس با آرامکس24
+- هیچ قیمت دقیق ننویس
+- هیچ اطلاعات ساختگی درباره قیمت نده
+- HTML خروجی بده
+- Markdown ممنوع
+
+
+قوانین JSON بسیار مهم:
+
+- خروجی فقط JSON باشد
+- هیچ متن قبل یا بعد JSON ننویس
+- از ``` استفاده نکن
+- تمام کوتیشن‌ها escape شوند
+- خط جدید خام داخل رشته‌ها قرار نده
+
+
+ساختار خروجی:
+
 
 {{
 "title":"",
@@ -215,278 +347,11 @@ def build_prompt(item):
 "content_html":"",
 "schema_jsonld":{{}}
 }}
+
+
+
+تاریخ:
+
+{today}
+
 """
-
-
-def repair_json(text):
-
-    # حذف markdown احتمالی
-    text = text.replace("```json", "")
-    text = text.replace("```", "")
-
-    text = text.strip()
-
-    # پیدا کردن شروع JSON
-    start = text.find("{")
-
-    if start == -1:
-        raise RuntimeError("JSON پیدا نشد")
-
-    text = text[start:]
-
-    try:
-        return json.loads(text)
-
-    except json.JSONDecodeError:
-
-        log.warning("JSON ناقص دریافت شد، تلاش برای تعمیر")
-
-        # بستن رشته باز
-        if text.count('"') % 2 != 0:
-            text += '"'
-
-        # بستن براکت‌ها
-        open_brace = text.count("{")
-        close_brace = text.count("}")
-
-        if open_brace > close_brace:
-            text += "}" * (open_brace - close_brace)
-
-        return json.loads(text)
-
-
-def generate_article(item):
-
-    log.info(f"در حال ساخت مقاله: {item['keyword']}")
-
-    completion = client.chat.completions.create(
-        model=NVIDIA_MODEL,
-
-        messages=[
-            {
-                "role": "system",
-                "content": "تو یک متخصص سئو و تولید محتوای فارسی هستی."
-            },
-            {
-                "role": "user",
-                "content": build_prompt(item)
-            }
-        ],
-
-        temperature=0.7,
-
-        top_p=0.95,
-
-        max_tokens=3500,
-
-      
-           extra_body={
-    "chat_template_kwargs": {
-        "enable_thinking": True
-    },
-    "reasoning_budget": 1000
-}
-        
-    )
-
-    text = completion.choices[0].message.content
-
-    return repair_json(text)
-
-    text = completion.choices[0].message.content
-
-    article = repair_json(text)
-
-    if not article.get("slug"):
-
-        article["slug"] = slugify(article["title"])
-
-    if not article.get("meta_title"):
-
-        article["meta_title"] = article["title"]
-
-    if not article.get("meta_description"):
-
-        article["meta_description"] = article["title"][:150]
-
-    if not article.get("schema_jsonld"):
-
-        article["schema_jsonld"] = {}
-
-    return article
-def publish(article):
-
-    schema = ""
-
-    if article.get("schema_jsonld"):
-
-        schema = (
-            '<script type="application/ld+json">'
-            + json.dumps(
-                article["schema_jsonld"],
-                ensure_ascii=False
-            )
-            + "</script>"
-        )
-
-    content = article["content_html"] + "\n" + schema
-
-    MAX_SIZE = 50000
-
-    if len(content) > MAX_SIZE:
-
-        log.warning(
-            f"Article too large ({len(content)} chars). Trimming..."
-        )
-
-        content = content[:MAX_SIZE]
-
-    payload = {
-
-        "title": article["title"],
-
-        "slug": article["slug"],
-
-        "status": "publish",
-
-        "content": content,
-
-        "excerpt": article["meta_description"]
-
-    }
-
-    url = f"{WP_BASE_URL}/wp-json/wp/v2/posts"
-
-    for attempt in range(1, 4):
-
-        try:
-
-            log.info(
-                f"Publishing... Attempt {attempt}"
-            )
-
-            r = session.post(
-
-                url,
-
-                auth=(
-                    WP_USERNAME,
-                    WP_APP_PASSWORD
-                ),
-
-                json=payload,
-
-                timeout=180,
-
-                headers={
-                    "User-Agent": "Aramax24Bot/2.0"
-                }
-
-            )
-
-            log.info(
-                f"WordPress HTTP {r.status_code}"
-            )
-
-            if r.status_code >= 400:
-
-                log.error(r.text)
-
-            r.raise_for_status()
-
-            post = r.json()
-
-            log.info(
-                "Publish successful."
-            )
-
-            return post["link"]
-
-        except requests.exceptions.ConnectionError as e:
-
-            log.error(e)
-
-            if attempt == 3:
-                raise
-
-            time.sleep(10)
-
-        except requests.exceptions.Timeout:
-
-            log.error("Timeout")
-
-            if attempt == 3:
-                raise
-
-            time.sleep(10)
-
-        except Exception:
-
-            raise
-def notify_success(item, article, link):
-
-    message = f"""
-✅ <b>مقاله جدید منتشر شد</b>
-
-📝 {article["title"]}
-
-📂 {item["category"]}
-
-🔑 {item["keyword"]}
-
-🔗 {link}
-"""
-
-    send_telegram(message)
-
-
-def notify_error(error):
-
-    send_telegram(
-        f"❌ خطا در انتشار مقاله\n\n{str(error)[:3500]}"
-    )
-
-
-def main():
-
-    started = time.time()
-
-    try:
-
-        item = pick_today_keyword()
-
-        log.info(item["keyword"])
-
-        article = generate_article(item)
-
-        log.info(article["title"])
-
-        link = publish(article)
-
-        notify_success(
-            item,
-            article,
-            link
-        )
-
-        elapsed = round(
-            time.time() - started,
-            1
-        )
-
-        log.info(
-            f"Completed in {elapsed} sec"
-        )
-
-    except Exception as e:
-
-        log.exception(e)
-
-        notify_error(e)
-
-        raise
-
-
-if __name__ == "__main__":
-
-    main()
