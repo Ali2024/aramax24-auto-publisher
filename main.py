@@ -220,16 +220,39 @@ def build_prompt(item):
 
 def repair_json(text):
 
-    m = re.search(r"\{[\s\S]*\}", text)
-
-    if m:
-        text = m.group(0)
-
+    # حذف markdown احتمالی
     text = text.replace("```json", "")
-
     text = text.replace("```", "")
 
-    return json.loads(text)
+    text = text.strip()
+
+    # پیدا کردن شروع JSON
+    start = text.find("{")
+
+    if start == -1:
+        raise RuntimeError("JSON پیدا نشد")
+
+    text = text[start:]
+
+    try:
+        return json.loads(text)
+
+    except json.JSONDecodeError:
+
+        log.warning("JSON ناقص دریافت شد، تلاش برای تعمیر")
+
+        # بستن رشته باز
+        if text.count('"') % 2 != 0:
+            text += '"'
+
+        # بستن براکت‌ها
+        open_brace = text.count("{")
+        close_brace = text.count("}")
+
+        if open_brace > close_brace:
+            text += "}" * (open_brace - close_brace)
+
+        return json.loads(text)
 
 
 def generate_article(item):
@@ -254,13 +277,18 @@ def generate_article(item):
 
         top_p=0.95,
 
-        max_tokens=6000,
+        max_tokens=3500,
 
         extra_body={
             "chat_template_kwargs": {
                 "enable_thinking": True
             },
-            "reasoning_budget": 3000
+           extra_body={
+    "chat_template_kwargs": {
+        "enable_thinking": True
+    },
+    "reasoning_budget": 1000
+}
         }
     )
 
