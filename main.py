@@ -147,6 +147,8 @@ def generate_article(item: dict) -> dict:
         },
         timeout=280,
     )
+if resp.status_code >= 400:
+        log.error(f"پاسخ خطای Anthropic: {resp.text}")
     resp.raise_for_status()
     data = resp.json()
 
