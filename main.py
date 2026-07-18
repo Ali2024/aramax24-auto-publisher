@@ -51,7 +51,7 @@ NVIDIA_API_KEY = env("NVIDIA_API_KEY")
 NVIDIA_MODEL = env(
     "NVIDIA_MODEL",
     required=False,
-    default="nvidia/nemotron-3-ultra-253b-v1"
+    default="nvidia/nemotron-3-ultra-550b-a55b"
 )
 
 WP_BASE_URL = env("WP_BASE_URL").rstrip("/")
@@ -234,25 +234,39 @@ def repair_json(text):
 
 def generate_article(item):
 
-    log.info(item["keyword"])
+    log.info(f"در حال ساخت مقاله: {item['keyword']}")
 
     completion = client.chat.completions.create(
-
         model=NVIDIA_MODEL,
 
-        temperature=0.5,
-
-        top_p=0.9,
-
-        max_tokens=4000,
-
         messages=[
+            {
+                "role": "system",
+                "content": "تو یک متخصص سئو و تولید محتوای فارسی هستی."
+            },
             {
                 "role": "user",
                 "content": build_prompt(item)
             }
-        ]
+        ],
+
+        temperature=0.7,
+
+        top_p=0.95,
+
+        max_tokens=6000,
+
+        extra_body={
+            "chat_template_kwargs": {
+                "enable_thinking": True
+            },
+            "reasoning_budget": 3000
+        }
     )
+
+    text = completion.choices[0].message.content
+
+    return repair_json(text)
 
     text = completion.choices[0].message.content
 
