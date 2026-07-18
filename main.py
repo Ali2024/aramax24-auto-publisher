@@ -279,17 +279,14 @@ def generate_article(item):
 
         max_tokens=3500,
 
-        extra_body={
-            "chat_template_kwargs": {
-                "enable_thinking": True
-            },
+      
            extra_body={
     "chat_template_kwargs": {
         "enable_thinking": True
     },
     "reasoning_budget": 1000
 }
-        }
+        
     )
 
     text = completion.choices[0].message.content
